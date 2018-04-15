@@ -275,6 +275,27 @@ extern "C" {
 #endif
 
 /* 
+    various compile-time constants
+
+    FIXME: it may make sense to convert some of those into defines so
+    that the user code can override them.
+*/
+enum {
+    SG_INVALID_ID = 0,
+    SG_NUM_SHADER_STAGES = 2,
+    SG_NUM_INFLIGHT_FRAMES = 2,
+    SG_MAX_COLOR_ATTACHMENTS = 4,
+    SG_MAX_SHADERSTAGE_BUFFERS = 4,
+    SG_MAX_SHADERSTAGE_IMAGES = 12,
+    SG_MAX_SHADERSTAGE_UBS = 4,
+    SG_MAX_SHADERSTAGE_MACROS = 8,
+    SG_MAX_UB_MEMBERS = 16,
+    SG_MAX_VERTEX_ATTRIBUTES = 16,
+    SG_MAX_MIPMAPS = 16,
+    SG_MAX_TEXTUREARRAY_LAYERS = 128
+};
+
+/* 
     Resource id typedefs:
 
     sg_buffer:      vertex- and index-buffers
@@ -295,31 +316,12 @@ extern "C" {
     The resource ids are wrapped into a struct so that the compiler
     can complain when the wrong resource type is used.
 */
-typedef struct { uint32_t id; } sg_buffer;
-typedef struct { uint32_t id; } sg_image;
-typedef struct { uint32_t id; } sg_shader;
-typedef struct { uint32_t id; } sg_pipeline;
-typedef struct { uint32_t id; } sg_pass;
-
-/* 
-    various compile-time constants
-
-    FIXME: it may make sense to convert some of those into defines so
-    that the user code can override them.
-*/
-enum {
-    SG_INVALID_ID = 0,
-    SG_NUM_SHADER_STAGES = 2,
-    SG_NUM_INFLIGHT_FRAMES = 2,
-    SG_MAX_COLOR_ATTACHMENTS = 4,
-    SG_MAX_SHADERSTAGE_BUFFERS = 4,
-    SG_MAX_SHADERSTAGE_IMAGES = 12,
-    SG_MAX_SHADERSTAGE_UBS = 4,
-    SG_MAX_UB_MEMBERS = 16,
-    SG_MAX_VERTEX_ATTRIBUTES = 16,
-    SG_MAX_MIPMAPS = 16,
-    SG_MAX_TEXTUREARRAY_LAYERS = 128
-};
+#define SOKOL_DECL_RESOURCE(type) typedef struct { uint32_t id; } sg_##type; inline bool sg_##type##_isvalid( sg_##type res ) { return res.id!=SG_INVALID_ID; }
+SOKOL_DECL_RESOURCE(buffer);
+SOKOL_DECL_RESOURCE(image);
+SOKOL_DECL_RESOURCE(shader);
+SOKOL_DECL_RESOURCE(pipeline);
+SOKOL_DECL_RESOURCE(pass);
 
 /*
     sg_feature
@@ -1222,10 +1224,16 @@ typedef struct {
 } sg_shader_image_desc;
 
 typedef struct {
+    const char* name;
+    const char* definition;
+} sg_shader_macro;
+
+typedef struct {
     const char* source;
     const uint8_t* byte_code;
     int byte_code_size;
     const char* entry;
+    sg_shader_macro macros[SG_MAX_SHADERSTAGE_MACROS];
     sg_shader_uniform_block_desc uniform_blocks[SG_MAX_SHADERSTAGE_UBS];
     sg_shader_image_desc images[SG_MAX_SHADERSTAGE_IMAGES];
 } sg_shader_stage_desc;
@@ -4748,11 +4756,16 @@ _SOKOL_PRIVATE void _sg_destroy_image(_sg_image* img) {
 _SOKOL_PRIVATE ID3DBlob* _sg_d3d11_compile_shader(const sg_shader_stage_desc* stage_desc, const char* target) {
     ID3DBlob* output = NULL;
     ID3DBlob* errors = NULL;
+    D3D_SHADER_MACRO d3d_macros[SG_MAX_SHADERSTAGE_MACROS+1] = {};
+    for (int macro_index = 0; macro_index < SG_MAX_SHADERSTAGE_MACROS; macro_index++) {
+        d3d_macros[macro_index].Name = stage_desc->macros[macro_index].name;
+        d3d_macros[macro_index].Definition = stage_desc->macros[macro_index].definition;
+    }
     HRESULT hr = D3DCompile(
         stage_desc->source,             /* pSrcData */
         strlen(stage_desc->source),     /* SrcDataSize */
         NULL,                           /* pSourceName */
-        NULL,                           /* pDefines */
+        d3d_macros,                     /* pDefines */
         NULL,                           /* pInclude */
         stage_desc->entry ? stage_desc->entry : "main",     /* pEntryPoint */
         target,     /* pTarget (vs_5_0 or ps_5_0) */
