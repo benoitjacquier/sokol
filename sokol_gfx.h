@@ -8344,6 +8344,7 @@ bool sg_init_pass(sg_pass pass_id, const sg_pass_desc* desc) {
     }
     else {
         pass->slot.state = SG_RESOURCESTATE_FAILED;
+        return false;
     }
     SOKOL_ASSERT((pass->slot.state == SG_RESOURCESTATE_VALID)||(pass->slot.state == SG_RESOURCESTATE_FAILED)); 
 }
