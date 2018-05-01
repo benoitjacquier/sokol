@@ -3979,6 +3979,7 @@ _SOKOL_PRIVATE void _sg_reset_state_cache() {
 #pragma comment (lib, "d3d11.lib")
 #pragma comment (lib, "dxguid.lib")
 #if defined(SOKOL_D3D11_SHADER_COMPILER)
+#include <d3d11shader.h>
 #include <d3dcompiler.h>
 #pragma comment (lib, "d3dcompiler.lib")
 #endif
@@ -4783,47 +4784,17 @@ _SOKOL_PRIVATE ID3DBlob* _sg_d3d11_compile_shader(const sg_shader_stage_desc* st
 
 #define _sg_d3d11_roundup(val, round_to) (((val)+((round_to)-1))&~((round_to)-1))
 
+#define ID3D11ShaderReflection_GetDesc(This,pDesc) ( (This)->lpVtbl -> GetDesc(This,pDesc) ) 
+#define ID3D11ShaderReflection_GetConstantBufferByIndex(This,Index) ( (This)->lpVtbl -> GetConstantBufferByIndex(This,Index) ) 
+#define ID3D11ShaderReflection_GetResourceBindingDescByName(This,Name,pDesc) ( (This)->lpVtbl -> GetResourceBindingDescByName(This,Name,pDesc) ) 
+#define ID3D11ShaderReflectionConstantBuffer_GetDesc(This,pDesc) ( (This)->lpVtbl -> GetDesc(This,pDesc) ) 
+
+
 _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* desc) {
     SOKOL_ASSERT(shd && desc);
     SOKOL_ASSERT(shd->slot.state == SG_RESOURCESTATE_ALLOC);
     SOKOL_ASSERT(!shd->d3d11_vs && !shd->d3d11_fs && !shd->d3d11_vs_blob);
     HRESULT hr;
-
-    /* shader stage uniform blocks and image slots */
-    for (int stage_index = 0; stage_index < SG_NUM_SHADER_STAGES; stage_index++) {
-        const sg_shader_stage_desc* stage_desc = (stage_index == SG_SHADERSTAGE_VS) ? &desc->vs : &desc->fs;
-        _sg_shader_stage* stage = &shd->stage[stage_index];
-        SOKOL_ASSERT(stage->num_uniform_blocks == 0);
-        for (int ub_index = 0; ub_index < SG_MAX_SHADERSTAGE_UBS; ub_index++) {
-            const sg_shader_uniform_block_desc* ub_desc = &stage_desc->uniform_blocks[ub_index];
-            if (0 == ub_desc->size) {
-                break;
-            }
-            _sg_uniform_block* ub = &stage->uniform_blocks[ub_index];
-            ub->size = ub_desc->size;
-
-            /* create a D3D constant buffer */
-            SOKOL_ASSERT(!stage->d3d11_cbs[ub_index]);
-            D3D11_BUFFER_DESC cb_desc;
-            memset(&cb_desc, 0, sizeof(cb_desc));
-            cb_desc.ByteWidth = _sg_d3d11_roundup(ub->size, 16);
-            cb_desc.Usage = D3D11_USAGE_DEFAULT;
-            cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-            hr = ID3D11Device_CreateBuffer(_sg_d3d11.dev, &cb_desc, NULL, &stage->d3d11_cbs[ub_index]);
-            SOKOL_ASSERT(SUCCEEDED(hr) && stage->d3d11_cbs[ub_index]);
-
-            stage->num_uniform_blocks++;
-        }
-        SOKOL_ASSERT(stage->num_images == 0);
-        for (int img_index = 0; img_index < SG_MAX_SHADERSTAGE_IMAGES; img_index++) {
-            const sg_shader_image_desc* img_desc = &stage_desc->images[img_index];
-            if (img_desc->type == _SG_IMAGETYPE_DEFAULT) {
-                break;
-            }
-            stage->images[img_index].type = img_desc->type;
-            stage->num_images++;
-        }
-    }
 
     const void* vs_ptr = 0, *fs_ptr = 0;
     SIZE_T vs_length = 0, fs_length = 0;
@@ -4854,6 +4825,57 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
         }
         #endif
     }
+
+    /* shader stage uniform blocks and image slots */
+    for( int stage_index = 0; stage_index < SG_NUM_SHADER_STAGES; stage_index++ ) {
+        const sg_shader_stage_desc* stage_desc = ( stage_index == SG_SHADERSTAGE_VS ) ? &desc->vs : &desc->fs;
+        const void* shader_ptr =  ( stage_index == SG_SHADERSTAGE_VS ) ? vs_ptr: fs_ptr;
+        const size_t shader_length =  ( stage_index == SG_SHADERSTAGE_VS ) ? vs_length: fs_length;
+        ID3D11ShaderReflection* d3d_reflector = NULL;
+        D3DReflect( shader_ptr, shader_length, IID_ID3D11ShaderReflection, (void**)&d3d_reflector);
+        D3D11_SHADER_DESC d3d_shader_desc;
+        ID3D11ShaderReflection_GetDesc(d3d_reflector, &d3d_shader_desc);
+        _sg_shader_stage* stage = &shd->stage[stage_index];
+        SOKOL_ASSERT( stage->num_uniform_blocks == 0 );
+        SOKOL_ASSERT( d3d_shader_desc.ConstantBuffers <= SG_MAX_SHADERSTAGE_UBS );
+
+        for( UINT ub_index = 0; ub_index< d3d_shader_desc.ConstantBuffers; ub_index++ )
+        {
+            ID3D11ShaderReflectionConstantBuffer* d3d_cb = ID3D11ShaderReflection_GetConstantBufferByIndex(d3d_reflector, ub_index);
+            D3D11_SHADER_BUFFER_DESC d3d_cb_desc;
+            ID3D11ShaderReflectionConstantBuffer_GetDesc(d3d_cb, &d3d_cb_desc);
+            D3D11_SHADER_INPUT_BIND_DESC d3d_sib_desc;
+            ID3D11ShaderReflection_GetResourceBindingDescByName(d3d_reflector, d3d_cb_desc.Name, &d3d_sib_desc);
+            UINT cb_register_index = d3d_sib_desc.BindPoint;
+            SOKOL_ASSERT( cb_register_index<SG_MAX_SHADERSTAGE_UBS );
+
+            _sg_uniform_block* ub = &stage->uniform_blocks[cb_register_index];
+            ub->size = d3d_cb_desc.Size;
+
+            SOKOL_ASSERT( !stage->d3d11_cbs[cb_register_index] );
+            D3D11_BUFFER_DESC cb_desc;
+            memset( &cb_desc, 0, sizeof( cb_desc ) );
+            cb_desc.ByteWidth = _sg_d3d11_roundup( ub->size, 16 );
+            cb_desc.Usage = D3D11_USAGE_DEFAULT;
+            cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            hr = ID3D11Device_CreateBuffer( _sg_d3d11.dev, &cb_desc, NULL, &stage->d3d11_cbs[cb_register_index] );
+            SOKOL_ASSERT( SUCCEEDED( hr ) && stage->d3d11_cbs[cb_register_index] );
+
+            stage->num_uniform_blocks++; //useless?
+        }
+        SOKOL_ASSERT( stage->num_images == 0 );
+        for( int img_index = 0; img_index < SG_MAX_SHADERSTAGE_IMAGES; img_index++ )
+        {
+            const sg_shader_image_desc* img_desc = &stage_desc->images[img_index];
+            if( img_desc->type == _SG_IMAGETYPE_DEFAULT )
+            {
+                break;
+            }
+            stage->images[img_index].type = img_desc->type;
+            stage->num_images++;
+        }
+    }
+
     if (vs_ptr && fs_ptr && (vs_length > 0) && (fs_length > 0)) {
         /* create the D3D vertex- and pixel-shader objects */
         hr = ID3D11Device_CreateVertexShader(_sg_d3d11.dev, vs_ptr, vs_length, NULL, &shd->d3d11_vs);
@@ -4895,7 +4917,7 @@ _SOKOL_PRIVATE void _sg_destroy_shader(_sg_shader* shd) {
     }
     for (int stage_index = 0; stage_index < SG_NUM_SHADER_STAGES; stage_index++) {
         _sg_shader_stage* stage = &shd->stage[stage_index];
-        for (int ub_index = 0; ub_index < stage->num_uniform_blocks; ub_index++) {
+        for (int ub_index = 0; ub_index < SG_MAX_SHADERSTAGE_UBS; ub_index++) {
             if (stage->d3d11_cbs[ub_index]) {
                 ID3D11Buffer_Release(stage->d3d11_cbs[ub_index]);
             }
@@ -5393,7 +5415,7 @@ _SOKOL_PRIVATE void _sg_apply_uniform_block(sg_shader_stage stage_index, int ub_
     SOKOL_ASSERT((ub_index >= 0) && (ub_index < SG_MAX_SHADERSTAGE_UBS));
     SOKOL_ASSERT(_sg_d3d11.cur_pipeline && _sg_d3d11.cur_pipeline->slot.id == _sg_d3d11.cur_pipeline_id.id);
     SOKOL_ASSERT(_sg_d3d11.cur_pipeline->shader && _sg_d3d11.cur_pipeline->shader->slot.id == _sg_d3d11.cur_pipeline->shader_id.id);
-    SOKOL_ASSERT(ub_index < _sg_d3d11.cur_pipeline->shader->stage[stage_index].num_uniform_blocks);
+    //SOKOL_ASSERT(ub_index < _sg_d3d11.cur_pipeline->shader->stage[stage_index].num_uniform_blocks);
     SOKOL_ASSERT(num_bytes == _sg_d3d11.cur_pipeline->shader->stage[stage_index].uniform_blocks[ub_index].size);
     ID3D11Buffer* cb = _sg_d3d11.cur_pipeline->shader->stage[stage_index].d3d11_cbs[ub_index];
     SOKOL_ASSERT(cb);
@@ -8115,7 +8137,7 @@ _SOKOL_PRIVATE bool _sg_validate_apply_uniform_block(sg_shader_stage stage_index
 
         /* check that there is a uniform block at 'stage' and 'ub_index' */
         const _sg_shader_stage* stage = &pip->shader->stage[stage_index];
-        SOKOL_VALIDATE(ub_index < stage->num_uniform_blocks, _SG_VALIDATE_AUB_NO_UB_AT_SLOT);
+        SOKOL_VALIDATE(stage->uniform_blocks[ub_index].size!=0, _SG_VALIDATE_AUB_NO_UB_AT_SLOT);
 
         /* check that the provided data size doesn't exceed the uniform block size */
         SOKOL_VALIDATE(num_bytes <= stage->uniform_blocks[ub_index].size, _SG_VALIDATE_AUB_SIZE);
