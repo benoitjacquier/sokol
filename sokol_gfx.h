@@ -1034,6 +1034,7 @@ typedef struct {
     int shader_pool_size;
     int pipeline_pool_size;
     int pass_pool_size;
+    bool offscreen;
     /* GL specific */
     bool gl_force_gles2;
     /* Metal-specific */
@@ -4430,15 +4431,17 @@ _SOKOL_PRIVATE void _sg_setup_backend(const sg_desc* desc) {
     SOKOL_ASSERT(desc);
     SOKOL_ASSERT(desc->d3d11_device);
     SOKOL_ASSERT(desc->d3d11_device_context);
-    SOKOL_ASSERT(desc->d3d11_render_target_view_cb);
-    SOKOL_ASSERT(desc->d3d11_depth_stencil_view_cb);
-    SOKOL_ASSERT(desc->d3d11_render_target_view_cb != desc->d3d11_depth_stencil_view_cb);
     memset(&_sg_d3d11, 0, sizeof(_sg_d3d11));
     _sg_d3d11.valid = true;
     _sg_d3d11.dev = (ID3D11Device*) desc->d3d11_device;
     _sg_d3d11.ctx = (ID3D11DeviceContext*) desc->d3d11_device_context;
-    _sg_d3d11.rtv_cb = desc->d3d11_render_target_view_cb;
-    _sg_d3d11.dsv_cb = desc->d3d11_depth_stencil_view_cb;
+    if (!desc->offscreen) {
+        SOKOL_ASSERT(desc->d3d11_render_target_view_cb);
+        SOKOL_ASSERT(desc->d3d11_depth_stencil_view_cb);
+        SOKOL_ASSERT(desc->d3d11_render_target_view_cb!=desc->d3d11_depth_stencil_view_cb);
+        _sg_d3d11.rtv_cb = desc->d3d11_render_target_view_cb;
+        _sg_d3d11.dsv_cb = desc->d3d11_depth_stencil_view_cb;
+    }
 }
 
 _SOKOL_PRIVATE void _sg_discard_backend() {
