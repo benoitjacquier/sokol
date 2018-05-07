@@ -412,6 +412,7 @@ typedef enum {
     SG_USAGE_IMMUTABLE,
     SG_USAGE_DYNAMIC,
     SG_USAGE_STREAM,
+    SG_USAGE_CPUREAD,
     _SG_USAGE_NUM,
     _SG_USAGE_FORCE_U32 = 0x7FFFFFFF
 } sg_usage;
@@ -1491,7 +1492,9 @@ extern void sg_apply_draw_state(const sg_draw_state* ds);
 extern void sg_apply_uniform_block(sg_shader_stage stage, int ub_index, const void* data, int num_bytes);
 extern void sg_draw(int base_element, int num_elements, int num_instances);
 extern void sg_end_pass();
-extern void sg_dispatch(sg_compute_state* compute_state, int thread_x, int thread_y, int thread_z );
+extern void sg_dispatch(sg_compute_state* compute_state, int thread_x, int thread_y, int thread_z);
+extern void sg_image_copy(sg_image src, sg_image dst);
+extern void sg_image_read(sg_image src, void* dst);
 extern void sg_commit();
 
 /* separate resource allocation and initialization (for async setup) */ 
@@ -4018,6 +4021,8 @@ _SOKOL_PRIVATE D3D11_USAGE _sg_d3d11_usage(sg_usage usg) {
         case SG_USAGE_DYNAMIC:
         case SG_USAGE_STREAM:
             return D3D11_USAGE_DYNAMIC;
+        case SG_USAGE_CPUREAD:
+            return D3D11_USAGE_STAGING;
         default:
             SOKOL_UNREACHABLE;
             return (D3D11_USAGE) 0;
@@ -4031,6 +4036,8 @@ _SOKOL_PRIVATE UINT _sg_d3d11_cpu_access_flags(sg_usage usg) {
         case SG_USAGE_DYNAMIC:
         case SG_USAGE_STREAM:
             return D3D11_CPU_ACCESS_WRITE;
+        case SG_USAGE_CPUREAD:
+            return D3D11_CPU_ACCESS_READ;
         default:
             SOKOL_UNREACHABLE;
             return 0;
@@ -4633,6 +4640,8 @@ _SOKOL_PRIVATE void _sg_create_image(_sg_image* img, const sg_image_desc* desc) 
                 d3d11_tex_desc.CPUAccessFlags = 0;
             }
             else {
+                if (img->usage == SG_USAGE_CPUREAD)
+                    d3d11_tex_desc.BindFlags = 0;
                 img->d3d11_format = _sg_d3d11_texture_format(img->pixel_format);
                 d3d11_tex_desc.Format = img->d3d11_format;
                 d3d11_tex_desc.Usage = _sg_d3d11_usage(img->usage);
@@ -4666,29 +4675,32 @@ _SOKOL_PRIVATE void _sg_create_image(_sg_image* img, const sg_image_desc* desc) 
             }
 
             /* shader-resource-view */
-            D3D11_SHADER_RESOURCE_VIEW_DESC d3d11_srv_desc;
-            memset(&d3d11_srv_desc, 0, sizeof(d3d11_srv_desc));
-            d3d11_srv_desc.Format = d3d11_tex_desc.Format;
-            switch (img->type) {
-                case SG_IMAGETYPE_2D:
-                    d3d11_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                    d3d11_srv_desc.Texture2D.MipLevels = img->num_mipmaps;
-                    break;
-                case SG_IMAGETYPE_CUBE:
-                    d3d11_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
-                    d3d11_srv_desc.TextureCube.MipLevels = img->num_mipmaps;
-                    break;
-                case SG_IMAGETYPE_ARRAY:
-                    d3d11_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-                    d3d11_srv_desc.Texture2DArray.MipLevels = img->num_mipmaps;
-                    d3d11_srv_desc.Texture2DArray.ArraySize = img->depth;
-                    break;
-                default:
-                    SOKOL_UNREACHABLE; break;
+            if( img->usage!=SG_USAGE_CPUREAD ) {
+
+                D3D11_SHADER_RESOURCE_VIEW_DESC d3d11_srv_desc;
+                memset(&d3d11_srv_desc, 0, sizeof(d3d11_srv_desc));
+                d3d11_srv_desc.Format = d3d11_tex_desc.Format;
+                switch (img->type) {
+                    case SG_IMAGETYPE_2D:
+                        d3d11_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                        d3d11_srv_desc.Texture2D.MipLevels = img->num_mipmaps;
+                        break;
+                    case SG_IMAGETYPE_CUBE:
+                        d3d11_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+                        d3d11_srv_desc.TextureCube.MipLevels = img->num_mipmaps;
+                        break;
+                    case SG_IMAGETYPE_ARRAY:
+                        d3d11_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+                        d3d11_srv_desc.Texture2DArray.MipLevels = img->num_mipmaps;
+                        d3d11_srv_desc.Texture2DArray.ArraySize = img->depth;
+                        break;
+                    default:
+                        SOKOL_UNREACHABLE; break;
+                }
+                hr = ID3D11Device_CreateShaderResourceView(_sg_d3d11.dev, (ID3D11Resource*)img->d3d11_tex2d, &d3d11_srv_desc, &img->d3d11_srv);
+                SOKOL_DX_CHECKRET(img, hr);
+                SOKOL_ASSERT(img->d3d11_srv);
             }
-            hr = ID3D11Device_CreateShaderResourceView(_sg_d3d11.dev, (ID3D11Resource*)img->d3d11_tex2d, &d3d11_srv_desc, &img->d3d11_srv);
-            SOKOL_DX_CHECKRET(img, hr);
-            SOKOL_ASSERT(img->d3d11_srv);
             
         }
         else {
@@ -4956,6 +4968,9 @@ _SOKOL_PRIVATE void _sg_destroy_shader(_sg_shader* shd) {
     }
     if (shd->d3d11_fs) {
         ID3D11PixelShader_Release(shd->d3d11_fs);
+    }
+    if(shd->d3d11_cs) {
+        ID3D11ComputeShader_Release(shd->d3d11_cs);
     }
     if (shd->d3d11_vs_blob) {
         SOKOL_FREE(shd->d3d11_vs_blob);
@@ -5490,8 +5505,6 @@ _SOKOL_PRIVATE void _sg_draw(int base_element, int num_elements, int num_instanc
     }
 }
 
-//_sg_lookup_image( &_sg.pools, compute_state->write_images[i] );
-//_SOKOL_PRIVATE void _sg_dispatch( sg_compute_state* compute_state, int thread_x, int thread_y, int thread_z ) {
 _SOKOL_PRIVATE void _sg_dispatch( _sg_shader* cs_shd, _sg_image** write_images, int thread_x, int thread_y, int thread_z ) {
     SOKOL_ASSERT(!_sg_d3d11.in_pass);
     SOKOL_ASSERT(cs_shd);
@@ -5518,6 +5531,39 @@ _SOKOL_PRIVATE void _sg_dispatch( _sg_shader* cs_shd, _sg_image** write_images, 
     }
     ID3D11DeviceContext_CSSetUnorderedAccessViews(_sg_d3d11.ctx, 0, SG_MAX_COLOR_ATTACHMENTS, uavs, 0);
     ID3D11DeviceContext_Dispatch(_sg_d3d11.ctx, thread_x, thread_y, thread_z);
+}
+
+_SOKOL_PRIVATE void _sg_image_copy(_sg_image* src, _sg_image* dst) {
+    SOKOL_ASSERT(src);
+    SOKOL_ASSERT(dst);
+
+    ID3D11DeviceContext_CopyResource(_sg_d3d11.ctx, (ID3D11Resource*)dst->d3d11_tex2d, (ID3D11Resource*)src->d3d11_tex2d);
+}
+
+_SOKOL_PRIVATE void _sg_image_read(_sg_image* image, uint8_t* dst) {
+    SOKOL_ASSERT(image);
+    SOKOL_ASSERT(dst);
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    HRESULT hr = ID3D11DeviceContext_Map(_sg_d3d11.ctx, (ID3D11Resource*)image->d3d11_tex2d, 0, D3D11_MAP_READ, 0, &mapped);
+    SOKOL_ASSERT(SUCCEEDED(hr));
+
+    uint32_t srcWidth  = image->width;
+    uint32_t srcHeight = image->height;
+    uint8_t* src       = (uint8_t*)mapped.pData;
+    uint32_t srcPitch  = mapped.RowPitch;
+
+    const uint8_t bpp = _sg_pixelformat_bytesize(image->pixel_format)*8;
+    uint32_t dstPitch = srcWidth*bpp/8;
+
+    uint32_t pitch = _sg_min(srcPitch, dstPitch);
+
+    for(uint32_t yy = 0, height = srcHeight; yy<height; ++yy) {
+        memcpy(dst, src, pitch);
+        src += srcPitch;
+        dst += dstPitch;
+    }
+
+    ID3D11DeviceContext_Unmap(_sg_d3d11.ctx, (ID3D11Resource*)image->d3d11_tex2d, 0);
 }
 
 
@@ -8812,6 +8858,19 @@ void sg_dispatch(sg_compute_state* compute_state, int thread_x, int thread_y, in
         write_images[i] = _sg_lookup_image(&_sg.pools, compute_state->write_images[i].id );
     }
     _sg_dispatch(shd, write_images, thread_x, thread_y, thread_z );
+}
+
+void sg_image_copy(sg_image src, sg_image dst) {
+    _sg_image* src_image = _sg_lookup_image(&_sg.pools, src.id);
+    _sg_image* dst_image = _sg_lookup_image(&_sg.pools, dst.id);
+    _sg_image_copy( src_image, dst_image );
+
+}
+void sg_image_read(sg_image src, void *dst) {
+    _sg_image* image = _sg_lookup_image(&_sg.pools, src.id);
+    SOKOL_ASSERT(image);
+    SOKOL_ASSERT(image->usage == SG_USAGE_CPUREAD);
+    _sg_image_read(image, (uint8_t*)dst);
 }
 
 void sg_end_pass() {
