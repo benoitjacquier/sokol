@@ -525,6 +525,7 @@ typedef enum {
     SG_PIXELFORMAT_R5G6B5,
     SG_PIXELFORMAT_R5G5B5A1,
     SG_PIXELFORMAT_R10G10B10A2,
+    SG_PIXELFORMAT_RGBA16UI,
     SG_PIXELFORMAT_RGBA32F,
     SG_PIXELFORMAT_RGBA16F,
     SG_PIXELFORMAT_R32F,
@@ -958,6 +959,7 @@ sg_compute_state
 typedef struct {
     uint32_t _start_canary;
     sg_shader compute_shader;
+    sg_image images[SG_MAX_SHADERSTAGE_IMAGES];
     sg_image write_images[SG_MAX_COLOR_ATTACHMENTS];
     int	write_image_mips[SG_MAX_COLOR_ATTACHMENTS];
     uint32_t _end_canary;
@@ -1677,6 +1679,7 @@ _SOKOL_PRIVATE bool _sg_is_valid_rendertarget_color_format(sg_pixel_format fmt) 
         case SG_PIXELFORMAT_R10G10B10A2:
         case SG_PIXELFORMAT_RGBA32F:
         case SG_PIXELFORMAT_RGBA16F:
+        case SG_PIXELFORMAT_RGBA16UI:
             return true;
         default:
             return false;
@@ -1705,6 +1708,7 @@ _SOKOL_PRIVATE int _sg_pixelformat_bytesize(sg_pixel_format fmt) {
     switch (fmt) {
         case SG_PIXELFORMAT_RGBA32F:
             return 16;
+        case SG_PIXELFORMAT_RGBA16UI:
         case SG_PIXELFORMAT_RGBA16F:
             return 8;
         case SG_PIXELFORMAT_RGBA8:
@@ -4058,6 +4062,7 @@ _SOKOL_PRIVATE DXGI_FORMAT _sg_d3d11_texture_format(sg_pixel_format fmt) {
         case SG_PIXELFORMAT_R10G10B10A2:    return DXGI_FORMAT_R10G10B10A2_UNORM;
         case SG_PIXELFORMAT_RGBA32F:        return DXGI_FORMAT_R32G32B32A32_FLOAT;
         case SG_PIXELFORMAT_RGBA16F:        return DXGI_FORMAT_R16G16B16A16_FLOAT;
+        case SG_PIXELFORMAT_RGBA16UI:       return DXGI_FORMAT_R16G16B16A16_UINT;
         case SG_PIXELFORMAT_R32F:           return DXGI_FORMAT_R32_FLOAT;
         case SG_PIXELFORMAT_R16F:           return DXGI_FORMAT_R16_FLOAT;
         case SG_PIXELFORMAT_L8:             return DXGI_FORMAT_R8_UNORM;
@@ -4073,6 +4078,7 @@ _SOKOL_PRIVATE DXGI_FORMAT _sg_d3d11_rendertarget_color_format(sg_pixel_format f
         case SG_PIXELFORMAT_RGBA8:          return DXGI_FORMAT_R8G8B8A8_UNORM;
         case SG_PIXELFORMAT_RGBA32F:        return DXGI_FORMAT_R32G32B32A32_FLOAT;
         case SG_PIXELFORMAT_RGBA16F:        return DXGI_FORMAT_R16G16B16A16_FLOAT;
+        case SG_PIXELFORMAT_RGBA16UI:       return DXGI_FORMAT_R16G16B16A16_UINT;
         case SG_PIXELFORMAT_R32F:           return DXGI_FORMAT_R32_FLOAT;
         case SG_PIXELFORMAT_R16F:           return DXGI_FORMAT_R16_FLOAT;
         case SG_PIXELFORMAT_L8:             return DXGI_FORMAT_R8_UNORM;
@@ -5508,7 +5514,7 @@ _SOKOL_PRIVATE void _sg_draw(int base_element, int num_elements, int num_instanc
     }
 }
 
-_SOKOL_PRIVATE void _sg_dispatch( _sg_shader* cs_shd, _sg_image** write_images, int thread_x, int thread_y, int thread_z ) {
+_SOKOL_PRIVATE void _sg_dispatch(_sg_shader* cs_shd, _sg_image** images, _sg_image** write_images, int thread_x, int thread_y, int thread_z ) {
     SOKOL_ASSERT(!_sg_d3d11.in_pass);
     SOKOL_ASSERT(cs_shd);
     SOKOL_ASSERT(cs_shd->d3d11_cs);
@@ -5532,7 +5538,14 @@ _SOKOL_PRIVATE void _sg_dispatch( _sg_shader* cs_shd, _sg_image** write_images, 
             uavs[i] = img->d3d11_uav;
         }
     }
+    ID3D11ShaderResourceView* srvs[SG_MAX_SHADERSTAGE_IMAGES] = {};
+    for(int i=0; i<SG_MAX_COLOR_ATTACHMENTS; i++) {
+        if (images[i])
+            srvs[i] = images[i]->d3d11_srv;
+    }
+    
     ID3D11DeviceContext_CSSetUnorderedAccessViews(_sg_d3d11.ctx, 0, SG_MAX_COLOR_ATTACHMENTS, uavs, 0);
+    ID3D11DeviceContext_CSSetShaderResources(_sg_d3d11.ctx, 0, SG_MAX_SHADERSTAGE_IMAGES, srvs, 0);
     ID3D11DeviceContext_Dispatch(_sg_d3d11.ctx, thread_x, thread_y, thread_z);
 }
 
@@ -8860,7 +8873,13 @@ void sg_dispatch(sg_compute_state* compute_state, int thread_x, int thread_y, in
     for (int i=0;i<SG_MAX_COLOR_ATTACHMENTS;i++) {
         write_images[i] = _sg_lookup_image(&_sg.pools, compute_state->write_images[i].id );
     }
-    _sg_dispatch(shd, write_images, thread_x, thread_y, thread_z );
+
+    _sg_image* imgs[SG_MAX_SHADERSTAGE_IMAGES] = { 0 };
+    for (int i=0; i<SG_MAX_COLOR_ATTACHMENTS; i++) {
+        imgs[i] = _sg_lookup_image(&_sg.pools, compute_state->images[i].id );
+    }
+    
+    _sg_dispatch(shd, imgs, write_images, thread_x, thread_y, thread_z );
 }
 
 void sg_image_copy(sg_image src, sg_image dst) {
