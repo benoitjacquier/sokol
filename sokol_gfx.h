@@ -526,6 +526,7 @@ typedef enum {
     SG_PIXELFORMAT_R5G5B5A1,
     SG_PIXELFORMAT_R10G10B10A2,
     SG_PIXELFORMAT_RGBA16UI,
+    SG_PIXELFORMAT_RGBA32UI,
     SG_PIXELFORMAT_RGBA32F,
     SG_PIXELFORMAT_RGBA16F,
     SG_PIXELFORMAT_R32F,
@@ -1680,6 +1681,7 @@ _SOKOL_PRIVATE bool _sg_is_valid_rendertarget_color_format(sg_pixel_format fmt) 
         case SG_PIXELFORMAT_RGBA32F:
         case SG_PIXELFORMAT_RGBA16F:
         case SG_PIXELFORMAT_RGBA16UI:
+        case SG_PIXELFORMAT_RGBA32UI:
             return true;
         default:
             return false;
@@ -1706,6 +1708,7 @@ _SOKOL_PRIVATE bool _sg_is_depth_stencil_format(sg_pixel_format fmt) {
 /* return the bytes-per-pixel for a pixel format */
 _SOKOL_PRIVATE int _sg_pixelformat_bytesize(sg_pixel_format fmt) {
     switch (fmt) {
+        case SG_PIXELFORMAT_RGBA32UI:
         case SG_PIXELFORMAT_RGBA32F:
             return 16;
         case SG_PIXELFORMAT_RGBA16UI:
@@ -4061,6 +4064,7 @@ _SOKOL_PRIVATE DXGI_FORMAT _sg_d3d11_texture_format(sg_pixel_format fmt) {
         case SG_PIXELFORMAT_RGBA8:          return DXGI_FORMAT_R8G8B8A8_UNORM;
         case SG_PIXELFORMAT_R10G10B10A2:    return DXGI_FORMAT_R10G10B10A2_UNORM;
         case SG_PIXELFORMAT_RGBA32F:        return DXGI_FORMAT_R32G32B32A32_FLOAT;
+        case SG_PIXELFORMAT_RGBA32UI:       return DXGI_FORMAT_R32G32B32A32_UINT;
         case SG_PIXELFORMAT_RGBA16F:        return DXGI_FORMAT_R16G16B16A16_FLOAT;
         case SG_PIXELFORMAT_RGBA16UI:       return DXGI_FORMAT_R16G16B16A16_UINT;
         case SG_PIXELFORMAT_R32F:           return DXGI_FORMAT_R32_FLOAT;
@@ -4076,6 +4080,7 @@ _SOKOL_PRIVATE DXGI_FORMAT _sg_d3d11_texture_format(sg_pixel_format fmt) {
 _SOKOL_PRIVATE DXGI_FORMAT _sg_d3d11_rendertarget_color_format(sg_pixel_format fmt) {
     switch (fmt) {
         case SG_PIXELFORMAT_RGBA8:          return DXGI_FORMAT_R8G8B8A8_UNORM;
+        case SG_PIXELFORMAT_RGBA32UI:       return DXGI_FORMAT_R32G32B32A32_UINT;
         case SG_PIXELFORMAT_RGBA32F:        return DXGI_FORMAT_R32G32B32A32_FLOAT;
         case SG_PIXELFORMAT_RGBA16F:        return DXGI_FORMAT_R16G16B16A16_FLOAT;
         case SG_PIXELFORMAT_RGBA16UI:       return DXGI_FORMAT_R16G16B16A16_UINT;
