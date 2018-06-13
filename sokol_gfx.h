@@ -958,11 +958,17 @@ sg_compute_state
 */
 
 typedef struct {
+    void*    data;
+    uint32_t size;
+}sg_compute_uniform;
+
+typedef struct {
     uint32_t _start_canary;
     sg_shader compute_shader;
     sg_image images[SG_MAX_SHADERSTAGE_IMAGES];
     sg_image write_images[SG_MAX_COLOR_ATTACHMENTS];
-    int	write_image_mips[SG_MAX_COLOR_ATTACHMENTS];
+    int write_image_mips[SG_MAX_COLOR_ATTACHMENTS];
+    sg_compute_uniform uniforms[SG_MAX_SHADERSTAGE_UBS];
     uint32_t _end_canary;
 } sg_compute_state;
 
@@ -1509,8 +1515,8 @@ extern sg_pipeline sg_alloc_pipeline();
 extern sg_pass sg_alloc_pass();
 extern bool sg_init_buffer(sg_buffer buf_id, const sg_buffer_desc* desc);
 extern bool sg_init_image(sg_image img_id, const sg_image_desc* desc);
-extern bool	sg_init_shader(sg_shader shd_id, const sg_shader_desc* desc);
-extern bool	sg_init_pipeline(sg_pipeline pip_id, const sg_pipeline_desc* desc);
+extern bool sg_init_shader(sg_shader shd_id, const sg_shader_desc* desc);
+extern bool sg_init_pipeline(sg_pipeline pip_id, const sg_pipeline_desc* desc);
 extern bool sg_init_pass(sg_pass pass_id, const sg_pass_desc* desc);
 extern void sg_fail_buffer(sg_buffer buf_id);
 extern void sg_fail_image(sg_image img_id);
@@ -3990,8 +3996,8 @@ _SOKOL_PRIVATE void _sg_reset_state_cache() {
 
 /*== D3D11 BACKEND ===========================================================*/
 #elif defined(SOKOL_D3D11)
-#define	SOKOL_DX_CHECKRET(res, hr) if (!SUCCEEDED(hr)) { res->slot.state = SG_RESOURCESTATE_FAILED; return; }
-#define	SOKOL_DX_CHECKMSGRET(res, hr, msg) if (!SUCCEEDED(hr)) { SOKOL_LOG(msg); res->slot.state = SG_RESOURCESTATE_FAILED; return; }
+#define SOKOL_DX_CHECKRET(res, hr) if (!SUCCEEDED(hr)) { res->slot.state = SG_RESOURCESTATE_FAILED; return; }
+#define SOKOL_DX_CHECKMSGRET(res, hr, msg) if (!SUCCEEDED(hr)) { SOKOL_LOG(msg); res->slot.state = SG_RESOURCESTATE_FAILED; return; }
 #ifndef D3D11_NO_HELPERS
 #define D3D11_NO_HELPERS
 #endif
@@ -5519,7 +5525,7 @@ _SOKOL_PRIVATE void _sg_draw(int base_element, int num_elements, int num_instanc
     }
 }
 
-_SOKOL_PRIVATE void _sg_dispatch(_sg_shader* cs_shd, _sg_image** images, _sg_image** write_images, int thread_x, int thread_y, int thread_z ) {
+_SOKOL_PRIVATE void _sg_dispatch(_sg_shader* cs_shd, _sg_image** images, _sg_image** write_images, void **uniforms, int thread_x, int thread_y, int thread_z ) {
     SOKOL_ASSERT(!_sg_d3d11.in_pass);
     SOKOL_ASSERT(cs_shd);
     SOKOL_ASSERT(cs_shd->d3d11_cs);
@@ -5548,9 +5554,18 @@ _SOKOL_PRIVATE void _sg_dispatch(_sg_shader* cs_shd, _sg_image** images, _sg_ima
         if (images[i])
             srvs[i] = images[i]->d3d11_srv;
     }
-    
+
     ID3D11DeviceContext_CSSetUnorderedAccessViews(_sg_d3d11.ctx, 0, SG_MAX_COLOR_ATTACHMENTS, uavs, 0);
     ID3D11DeviceContext_CSSetShaderResources(_sg_d3d11.ctx, 0, SG_MAX_SHADERSTAGE_IMAGES, srvs, 0);
+    for(int i=0; i<SG_MAX_SHADERSTAGE_UBS; i++) {
+        ID3D11Buffer* cb = cs_shd->stage[SG_SHADERSTAGE_COMPUTE].d3d11_cbs[i];
+        if (cb!=NULL ) {
+            SOKOL_ASSERT( uniforms[i] );
+            ID3D11DeviceContext_UpdateSubresource( _sg_d3d11.ctx, (ID3D11Resource*)cb, 0, NULL, uniforms[i], 0, 0 );
+        }
+    }
+    ID3D11DeviceContext_CSSetConstantBuffers( _sg_d3d11.ctx, 0, SG_MAX_SHADERSTAGE_UBS, cs_shd->stage[SG_SHADERSTAGE_COMPUTE].d3d11_cbs);
+
     ID3D11DeviceContext_Dispatch(_sg_d3d11.ctx, thread_x, thread_y, thread_z);
 }
 
@@ -8883,8 +8898,13 @@ void sg_dispatch(sg_compute_state* compute_state, int thread_x, int thread_y, in
     for (int i=0; i<SG_MAX_COLOR_ATTACHMENTS; i++) {
         imgs[i] = _sg_lookup_image(&_sg.pools, compute_state->images[i].id );
     }
+
+    void* uniforms[SG_MAX_SHADERSTAGE_UBS] = {0};
+    for (int i=0; i<SG_MAX_SHADERSTAGE_UBS; i++) {
+        uniforms[i] = compute_state->uniforms[i].data;
+    }
     
-    _sg_dispatch(shd, imgs, write_images, thread_x, thread_y, thread_z );
+    _sg_dispatch(shd, imgs, write_images, uniforms, thread_x, thread_y, thread_z );
 }
 
 void sg_image_copy(sg_image src, sg_image dst) {
