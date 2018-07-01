@@ -959,7 +959,7 @@ typedef struct {
     uint32_t _start_canary;
     sg_shader compute_shader;
     sg_image write_images[SG_MAX_COLOR_ATTACHMENTS];
-    int	write_image_mips[SG_MAX_COLOR_ATTACHMENTS];
+    int write_image_mips[SG_MAX_COLOR_ATTACHMENTS];
     uint32_t _end_canary;
 } sg_compute_state;
 
@@ -1505,8 +1505,8 @@ extern sg_pipeline sg_alloc_pipeline();
 extern sg_pass sg_alloc_pass();
 extern bool sg_init_buffer(sg_buffer buf_id, const sg_buffer_desc* desc);
 extern bool sg_init_image(sg_image img_id, const sg_image_desc* desc);
-extern bool	sg_init_shader(sg_shader shd_id, const sg_shader_desc* desc);
-extern bool	sg_init_pipeline(sg_pipeline pip_id, const sg_pipeline_desc* desc);
+extern bool sg_init_shader(sg_shader shd_id, const sg_shader_desc* desc);
+extern bool sg_init_pipeline(sg_pipeline pip_id, const sg_pipeline_desc* desc);
 extern bool sg_init_pass(sg_pass pass_id, const sg_pass_desc* desc);
 extern void sg_fail_buffer(sg_buffer buf_id);
 extern void sg_fail_image(sg_image img_id);
@@ -3982,8 +3982,8 @@ _SOKOL_PRIVATE void _sg_reset_state_cache() {
 
 /*== D3D11 BACKEND ===========================================================*/
 #elif defined(SOKOL_D3D11)
-#define	SOKOL_DX_CHECKRET(res, hr) if (!SUCCEEDED(hr)) { res->slot.state = SG_RESOURCESTATE_FAILED; return; }
-#define	SOKOL_DX_CHECKMSGRET(res, hr, msg) if (!SUCCEEDED(hr)) { SOKOL_LOG(msg); res->slot.state = SG_RESOURCESTATE_FAILED; return; }
+#define SOKOL_DX_CHECKRET(res, hr) if (!SUCCEEDED(hr)) { res->slot.state = SG_RESOURCESTATE_FAILED; return; }
+#define SOKOL_DX_CHECKMSGRET(res, hr, msg) if (!SUCCEEDED(hr)) { SOKOL_LOG(msg); res->slot.state = SG_RESOURCESTATE_FAILED; return; }
 #ifndef D3D11_NO_HELPERS
 #define D3D11_NO_HELPERS
 #endif
@@ -4829,6 +4829,7 @@ _SOKOL_PRIVATE ID3DBlob* _sg_d3d11_compile_shader(const sg_shader_stage_desc* st
 #define _sg_d3d11_roundup(val, round_to) (((val)+((round_to)-1))&~((round_to)-1))
 
 #define ID3D11ShaderReflection_GetDesc(This,pDesc) ( (This)->lpVtbl -> GetDesc(This,pDesc) ) 
+#define ID3D11ShaderReflection_GetResourceBindingDesc(This,ResourceIndex,pDesc) ( (This)->lpVtbl -> GetResourceBindingDesc(This,ResourceIndex,pDesc) ) 
 #define ID3D11ShaderReflection_GetConstantBufferByIndex(This,Index) ( (This)->lpVtbl -> GetConstantBufferByIndex(This,Index) ) 
 #define ID3D11ShaderReflection_GetResourceBindingDescByName(This,Name,pDesc) ( (This)->lpVtbl -> GetResourceBindingDescByName(This,Name,pDesc) ) 
 #define ID3D11ShaderReflectionConstantBuffer_GetDesc(This,pDesc) ( (This)->lpVtbl -> GetDesc(This,pDesc) ) 
@@ -4889,6 +4890,28 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
         SOKOL_ASSERT( stage->num_uniform_blocks == 0 );
         SOKOL_ASSERT( d3d_shader_desc.ConstantBuffers <= SG_MAX_SHADERSTAGE_UBS );
 
+        for( UINT in_index = 0; in_index<d3d_shader_desc.InputParameters; in_index++ )
+        {
+            D3D11_SHADER_INPUT_BIND_DESC d3d_sib_desc;
+            ID3D11ShaderReflection_GetResourceBindingDesc(d3d_reflector, in_index, &d3d_sib_desc );
+            if( d3d_sib_desc.Type==D3D_SIT_TEXTURE ) {
+                switch( d3d_sib_desc.Dimension ) {
+                    case D3D_SRV_DIMENSION_TEXTURE2D:
+                        stage->images[d3d_sib_desc.BindPoint].type = SG_IMAGETYPE_2D;
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURECUBE:
+                        stage->images[d3d_sib_desc.BindPoint].type = SG_IMAGETYPE_CUBE;
+                        break;
+                    case D3D_SRV_DIMENSION_TEXTURE3D:
+                        stage->images[d3d_sib_desc.BindPoint].type = SG_IMAGETYPE_3D;
+                        break;
+                    default: SOKOL_ASSERT(false);
+                }
+                stage->num_images++;
+            }
+
+        }
+
         for( UINT ub_index = 0; ub_index< d3d_shader_desc.ConstantBuffers; ub_index++ )
         {
             ID3D11ShaderReflectionConstantBuffer* d3d_cb = ID3D11ShaderReflection_GetConstantBufferByIndex(d3d_reflector, ub_index);
@@ -4913,7 +4936,7 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
 
             stage->num_uniform_blocks++; //useless?
         }
-        SOKOL_ASSERT( stage->num_images == 0 );
+        /*SOKOL_ASSERT( stage->num_images == 0 );
         for( int img_index = 0; img_index < SG_MAX_SHADERSTAGE_IMAGES; img_index++ )
         {
             const sg_shader_image_desc* img_desc = &stage_desc->images[img_index];
@@ -4923,7 +4946,7 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
             }
             stage->images[img_index].type = img_desc->type;
             stage->num_images++;
-        }
+        }*/
     }
 
     if (compute && shd_length[SG_SHADERSTAGE_COMPUTE]>0) {
@@ -8036,7 +8059,7 @@ _SOKOL_PRIVATE bool _sg_validate_pipeline_desc(const sg_pipeline_desc* desc) {
             }
             SOKOL_VALIDATE((l_desc->stride & 3) == 0, _SG_VALIDATE_PIPELINEDESC_LAYOUT_STRIDE4);
         }
-        SOKOL_VALIDATE(desc->layout.attrs[0].format != SG_VERTEXFORMAT_INVALID, _SG_VALIDATE_PIPELINEDESC_NO_ATTRS);
+        //SOKOL_VALIDATE(desc->layout.attrs[0].format != SG_VERTEXFORMAT_INVALID, _SG_VALIDATE_PIPELINEDESC_NO_ATTRS);
         bool attrs_cont = true;
         for (int attr_index = 0; attr_index < SG_MAX_VERTEX_ATTRIBUTES; attr_index++) {
             const sg_vertex_attr_desc* a_desc = &desc->layout.attrs[attr_index];
@@ -8222,9 +8245,10 @@ _SOKOL_PRIVATE bool _sg_validate_draw_state(const sg_draw_state* ds) {
                 SOKOL_VALIDATE(i < stage->num_images, _SG_VALIDATE_ADS_FS_IMGS);
                 const _sg_image* img = _sg_lookup_image(&_sg.pools, ds->fs_images[i].id);
                 SOKOL_ASSERT(img);
+                /*
                 if (img->slot.state == SG_RESOURCESTATE_VALID) {
                     SOKOL_VALIDATE(img->type == stage->images[i].type, _SG_VALIDATE_ADS_FS_IMG_TYPES);
-                }
+                }*/
             }
             else {
                 SOKOL_VALIDATE(i >= stage->num_images, _SG_VALIDATE_ADS_FS_IMGS);
