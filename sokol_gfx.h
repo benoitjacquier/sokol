@@ -4829,11 +4829,11 @@ _SOKOL_PRIVATE ID3DBlob* _sg_d3d11_compile_shader(const sg_shader_stage_desc* st
         d3d_macros[macro_index].Definition = stage_desc->macros[macro_index].definition;
     }
     HRESULT hr = D3DCompile(
-        stage_desc->source,             /* pSrcData */
-        strlen(stage_desc->source),     /* SrcDataSize */
-        NULL,                           /* pSourceName */
-        d3d_macros,                     /* pDefines */
-        NULL,                           /* pInclude */
+        stage_desc->source,                 /* pSrcData */
+        strlen(stage_desc->source),         /* SrcDataSize */
+        NULL,                               /* pSourceName */
+        d3d_macros,                         /* pDefines */
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,  /* pInclude */
         stage_desc->entry ? stage_desc->entry : "main",     /* pEntryPoint */
         target,     /* pTarget (vs_5_0 or ps_5_0) */
         D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR | D3DCOMPILE_OPTIMIZATION_LEVEL3,   /* Flags1 */
@@ -4912,26 +4912,30 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
         SOKOL_ASSERT( stage->num_uniform_blocks == 0 );
         SOKOL_ASSERT( d3d_shader_desc.ConstantBuffers <= SG_MAX_SHADERSTAGE_UBS );
 
-        for( UINT in_index = 0; in_index<d3d_shader_desc.InputParameters; in_index++ )
+        for( UINT in_index = 0; in_index<d3d_shader_desc.BoundResources; in_index++ )
         {
             D3D11_SHADER_INPUT_BIND_DESC d3d_sib_desc;
-            ID3D11ShaderReflection_GetResourceBindingDesc(d3d_reflector, in_index, &d3d_sib_desc );
-            if( d3d_sib_desc.Type==D3D_SIT_TEXTURE ) {
-                switch( d3d_sib_desc.Dimension ) {
+            HRESULT hr = ID3D11ShaderReflection_GetResourceBindingDesc(d3d_reflector, in_index, &d3d_sib_desc );
+            if( hr==S_OK ) {
+                if( d3d_sib_desc.Type == D3D_SIT_TEXTURE ) {
+                    switch( d3d_sib_desc.Dimension ) {
                     case D3D_SRV_DIMENSION_TEXTURE2D:
                         stage->images[d3d_sib_desc.BindPoint].type = SG_IMAGETYPE_2D;
+                        stage->num_images++;
                         break;
                     case D3D_SRV_DIMENSION_TEXTURECUBE:
                         stage->images[d3d_sib_desc.BindPoint].type = SG_IMAGETYPE_CUBE;
+                        stage->num_images++;
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE3D:
                         stage->images[d3d_sib_desc.BindPoint].type = SG_IMAGETYPE_3D;
+                        stage->num_images++;
                         break;
-                    default: SOKOL_ASSERT(false);
-                }
-                stage->num_images++;
-            }
+                    default: SOKOL_ASSERT( false );
+                    }
 
+                }
+            }
         }
 
         for( UINT ub_index = 0; ub_index< d3d_shader_desc.ConstantBuffers; ub_index++ )
