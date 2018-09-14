@@ -1682,6 +1682,8 @@ _SOKOL_PRIVATE bool _sg_is_compressed_pixel_format(sg_pixel_format fmt) {
 /* return true if pixel format is a valid render target format */
 _SOKOL_PRIVATE bool _sg_is_valid_rendertarget_color_format(sg_pixel_format fmt) {
     switch (fmt) {
+        case SG_PIXELFORMAT_R16F:
+        case SG_PIXELFORMAT_R32F:
         case SG_PIXELFORMAT_RGBA8:
         case SG_PIXELFORMAT_R10G10B10A2:
         case SG_PIXELFORMAT_RGBA32F:
