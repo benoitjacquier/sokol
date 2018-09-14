@@ -5472,25 +5472,17 @@ _SOKOL_PRIVATE void _sg_apply_draw_state(
         d3d11_vbs[i] = 0; 
         d3d11_vb_offsets[i] = 0;
     }
-    for (i = 0; i < num_vs_imgs; i++) {
-        SOKOL_ASSERT(vs_imgs[i]->d3d11_srv);
-        SOKOL_ASSERT(vs_imgs[i]->d3d11_smp);
-        d3d11_vs_srvs[i] = vs_imgs[i]->d3d11_srv;
-        d3d11_vs_smps[i] = vs_imgs[i]->d3d11_smp;
+    for (i = 0; i < SG_MAX_SHADERSTAGE_IMAGES; i++) {
+        SOKOL_ASSERT(vs_imgs[i]==NULL||vs_imgs[i]->d3d11_srv);
+        SOKOL_ASSERT(vs_imgs[i]==NULL||vs_imgs[i]->d3d11_smp);
+        d3d11_vs_srvs[i] = vs_imgs[i]==NULL?NULL:vs_imgs[i]->d3d11_srv;
+        d3d11_vs_smps[i] = vs_imgs[i]==NULL?NULL:vs_imgs[i]->d3d11_smp;
     }
-    for (; i < SG_MAX_SHADERSTAGE_IMAGES; i++) {
-        d3d11_vs_srvs[i] = 0;
-        d3d11_vs_smps[i] = 0;
-    }
-    for (i = 0; i < num_fs_imgs; i++) {
-        SOKOL_ASSERT(fs_imgs[i]->d3d11_srv);
-        SOKOL_ASSERT(fs_imgs[i]->d3d11_smp);
-        d3d11_fs_srvs[i] = fs_imgs[i]->d3d11_srv;
-        d3d11_fs_smps[i] = fs_imgs[i]->d3d11_smp;
-    }
-    for (; i < SG_MAX_SHADERSTAGE_IMAGES; i++) {
-        d3d11_fs_srvs[i] = 0;
-        d3d11_fs_smps[i] = 0;
+    for (i = 0; i < SG_MAX_SHADERSTAGE_IMAGES; i++) {
+        SOKOL_ASSERT(fs_imgs[i]==NULL||fs_imgs[i]->d3d11_srv);
+        SOKOL_ASSERT(fs_imgs[i]==NULL||fs_imgs[i]->d3d11_smp);
+        d3d11_fs_srvs[i] = fs_imgs[i]==NULL?NULL:fs_imgs[i]->d3d11_srv;
+        d3d11_fs_smps[i] = fs_imgs[i]==NULL?NULL:fs_imgs[i]->d3d11_smp;
     }
 
     /* FIXME: is it worth it to implement a state cache here? measure! */
@@ -5521,7 +5513,8 @@ _SOKOL_PRIVATE void _sg_apply_uniform_block(sg_shader_stage stage_index, int ub_
     SOKOL_ASSERT((ub_index >= 0) && (ub_index < SG_MAX_SHADERSTAGE_UBS));
     SOKOL_ASSERT(_sg_d3d11.cur_pipeline && _sg_d3d11.cur_pipeline->slot.id == _sg_d3d11.cur_pipeline_id.id);
     SOKOL_ASSERT(_sg_d3d11.cur_pipeline->shader && _sg_d3d11.cur_pipeline->shader->slot.id == _sg_d3d11.cur_pipeline->shader_id.id);
-    //SOKOL_ASSERT(ub_index < _sg_d3d11.cur_pipeline->shader->stage[stage_index].num_uniform_blocks);
+    if (_sg_d3d11.cur_pipeline->shader->stage[stage_index].uniform_blocks[ub_index].size==0)
+        return;
     SOKOL_ASSERT(num_bytes == _sg_d3d11.cur_pipeline->shader->stage[stage_index].uniform_blocks[ub_index].size);
     ID3D11Buffer* cb = _sg_d3d11.cur_pipeline->shader->stage[stage_index].d3d11_cbs[ub_index];
     SOKOL_ASSERT(cb);
@@ -8258,36 +8251,25 @@ _SOKOL_PRIVATE bool _sg_validate_draw_state(const sg_draw_state* ds) {
             }
         }
 
-        /* has expected vertex shader images */
-        for (int i = 0; i < SG_MAX_SHADERSTAGE_IMAGES; i++) {
+        /* has expected fragment shader images */
+        for (int i = 0; i<SG_MAX_SHADERSTAGE_IMAGES; i++) {
             _sg_shader_stage* stage = &pip->shader->stage[SG_SHADERSTAGE_VS];
-            if (ds->vs_images[i].id != SG_INVALID_ID) {
-                SOKOL_VALIDATE(i < stage->num_images, _SG_VALIDATE_ADS_VS_IMGS);
+            if (stage->images[i].type!=_SG_IMAGETYPE_DEFAULT) {
+                SOKOL_VALIDATE(ds->vs_images[i].id!=SG_INVALID_ID, _SG_VALIDATE_ADS_VS_IMGS);
                 const _sg_image* img = _sg_lookup_image(&_sg.pools, ds->vs_images[i].id);
                 SOKOL_ASSERT(img);
-                if (img->slot.state == SG_RESOURCESTATE_VALID) {
-                    SOKOL_VALIDATE(img->type == stage->images[i].type, _SG_VALIDATE_ADS_VS_IMG_TYPES);
-                }
-            }
-            else {
-                SOKOL_VALIDATE(i >= stage->num_images, _SG_VALIDATE_ADS_VS_IMGS);
+                SOKOL_VALIDATE(img->type==stage->images[i].type, _SG_VALIDATE_ADS_VS_IMG_TYPES);
             }
         }
 
         /* has expected fragment shader images */
         for (int i = 0; i < SG_MAX_SHADERSTAGE_IMAGES; i++) {
             _sg_shader_stage* stage = &pip->shader->stage[SG_SHADERSTAGE_FS];
-            if (ds->fs_images[i].id != SG_INVALID_ID) {
-                SOKOL_VALIDATE(i < stage->num_images, _SG_VALIDATE_ADS_FS_IMGS);
+            if (stage->images[i].type != _SG_IMAGETYPE_DEFAULT) {
+                SOKOL_VALIDATE( ds->fs_images[i].id != SG_INVALID_ID, _SG_VALIDATE_ADS_FS_IMGS );
                 const _sg_image* img = _sg_lookup_image(&_sg.pools, ds->fs_images[i].id);
                 SOKOL_ASSERT(img);
-                /*
-                if (img->slot.state == SG_RESOURCESTATE_VALID) {
-                    SOKOL_VALIDATE(img->type == stage->images[i].type, _SG_VALIDATE_ADS_FS_IMG_TYPES);
-                }*/
-            }
-            else {
-                SOKOL_VALIDATE(i >= stage->num_images, _SG_VALIDATE_ADS_FS_IMGS);
+                SOKOL_VALIDATE(img->type==stage->images[i].type, _SG_VALIDATE_ADS_FS_IMG_TYPES);
             }
         }
 
@@ -8327,13 +8309,12 @@ _SOKOL_PRIVATE bool _sg_validate_apply_uniform_block(sg_shader_stage stage_index
         const _sg_pipeline* pip = _sg_lookup_pipeline(&_sg.pools, _sg.cur_pipeline.id);
         SOKOL_ASSERT(pip && (pip->slot.id == _sg.cur_pipeline.id));
         SOKOL_ASSERT(pip->shader && (pip->shader->slot.id == pip->shader_id.id));
-
         /* check that there is a uniform block at 'stage' and 'ub_index' */
         const _sg_shader_stage* stage = &pip->shader->stage[stage_index];
-        SOKOL_VALIDATE(stage->uniform_blocks[ub_index].size!=0, _SG_VALIDATE_AUB_NO_UB_AT_SLOT);
-
+        if (stage->uniform_blocks[ub_index].size>0 ) {
         /* check that the provided data size doesn't exceed the uniform block size */
-        SOKOL_VALIDATE(num_bytes <= stage->uniform_blocks[ub_index].size, _SG_VALIDATE_AUB_SIZE);
+            SOKOL_VALIDATE(num_bytes<=stage->uniform_blocks[ub_index].size, _SG_VALIDATE_AUB_SIZE);
+        }
 
         return SOKOL_VALIDATE_END();
     #endif
@@ -8860,9 +8841,6 @@ void sg_apply_draw_state(const sg_draw_state* ds) {
             SOKOL_ASSERT(vs_imgs[i]);
             _sg.next_draw_valid &= (SG_RESOURCESTATE_VALID == vs_imgs[i]->slot.state);
         }
-        else {
-            break;
-        }
     }
 
     _sg_image* fs_imgs[SG_MAX_SHADERSTAGE_IMAGES] = { 0 };
@@ -8872,9 +8850,6 @@ void sg_apply_draw_state(const sg_draw_state* ds) {
             fs_imgs[i] = _sg_lookup_image(&_sg.pools, ds->fs_images[i].id);
             SOKOL_ASSERT(fs_imgs[i]);
             _sg.next_draw_valid &= (SG_RESOURCESTATE_VALID == fs_imgs[i]->slot.state);
-        }
-        else {
-            break;
         }
     }
     if (_sg.next_draw_valid) {
