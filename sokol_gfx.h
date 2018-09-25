@@ -292,7 +292,8 @@ enum {
     SG_MAX_UB_MEMBERS = 16,
     SG_MAX_VERTEX_ATTRIBUTES = 16,
     SG_MAX_MIPMAPS = 16,
-    SG_MAX_TEXTUREARRAY_LAYERS = 128
+    SG_MAX_TEXTUREARRAY_LAYERS = 128,
+    SG_MAX_PATH = 256
 };
 
 /* 
@@ -1274,6 +1275,8 @@ typedef struct {
         };
         sg_shader_stage_desc descs[SG_NUM_SHADER_STAGES];
     };
+    char     file_path[SG_MAX_PATH];
+    bool     compute;
     uint32_t _end_canary;
 } sg_shader_desc;
 
@@ -1476,8 +1479,10 @@ extern void sg_reset_state_cache();
 extern sg_buffer sg_make_buffer(const sg_buffer_desc* desc);
 extern sg_image sg_make_image(const sg_image_desc* desc);
 extern sg_shader sg_make_shader(const sg_shader_desc* desc);
+extern sg_shader sg_make_shader_frompath(const char *path);
 extern sg_pipeline sg_make_pipeline(const sg_pipeline_desc* desc);
 extern sg_pass sg_make_pass(const sg_pass_desc* desc);
+extern bool sg_shader_reload(sg_shader shd);
 extern void sg_destroy_buffer(sg_buffer buf);
 extern void sg_destroy_image(sg_image img);
 extern void sg_destroy_shader(sg_shader shd);
@@ -1530,6 +1535,7 @@ extern void sg_fail_pass(sg_pass pass_id);
 
 /*--- IMPLEMENTATION ---------------------------------------------------------*/
 #ifdef SOKOL_IMPL
+#include <stdio.h>
 
 #ifndef SOKOL_DEBUG
     #ifdef _DEBUG
@@ -4361,6 +4367,7 @@ typedef struct {
     ID3D11ComputeShader* d3d11_cs;
     void* d3d11_vs_blob;
     int d3d11_vs_blob_length;
+    sg_shader_desc desc; //keep desc for reloading
 } _sg_shader;
 
 _SOKOL_PRIVATE void _sg_init_shader(_sg_shader* shd) {
@@ -4387,6 +4394,7 @@ typedef struct {
     ID3D11RasterizerState* d3d11_rs;
     ID3D11DepthStencilState* d3d11_dss;
     ID3D11BlendState* d3d11_bs;
+    sg_pipeline_desc desc;
 } _sg_pipeline;
 
 _SOKOL_PRIVATE void _sg_init_pipeline(_sg_pipeline* pip) {
@@ -4820,26 +4828,73 @@ _SOKOL_PRIVATE void _sg_destroy_image(_sg_image* img) {
 }
 
 #if defined(SOKOL_D3D11_SHADER_COMPILER)
-_SOKOL_PRIVATE ID3DBlob* _sg_d3d11_compile_shader(const sg_shader_stage_desc* stage_desc, const char* target) {
+_SOKOL_PRIVATE char* _sg_string_loadfromfile(const char file_path[SG_MAX_PATH]) {
+    char* buffer = 0;
+    long length;
+    FILE* fp = fopen(file_path, "rb");
+    if (fp==NULL) return NULL;
+
+    fseek(fp, 0, SEEK_END);
+    length = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    buffer = (char*)SOKOL_MALLOC(length+1);
+
+    if (buffer==NULL) {
+        fclose(fp);
+        return NULL;
+    }
+    fread(buffer, 1, length, fp);
+    buffer[length] = '\0';
+    fclose(fp);
+    return buffer;
+}
+
+_SOKOL_PRIVATE ID3DBlob* _sg_d3d11_compile_shader(const sg_shader_desc* shader_desc, sg_shader_stage stage) {
+    
+    const sg_shader_stage_desc* stage_desc = &shader_desc->descs[stage];
     ID3DBlob* output = NULL;
     ID3DBlob* errors = NULL;
-    D3D_SHADER_MACRO d3d_macros[SG_MAX_SHADERSTAGE_MACROS+1] = {};
-    for (int macro_index = 0; macro_index < SG_MAX_SHADERSTAGE_MACROS; macro_index++) {
+    D3D_SHADER_MACRO d3d_macros[SG_MAX_SHADERSTAGE_MACROS+2] = {}; //+2 for D_VERTEX..and NULL
+    int macro_index = 0;
+    for (macro_index = 0; macro_index < SG_MAX_SHADERSTAGE_MACROS; macro_index++) {
         d3d_macros[macro_index].Name = stage_desc->macros[macro_index].name;
         d3d_macros[macro_index].Definition = stage_desc->macros[macro_index].definition;
+        if (d3d_macros[macro_index].Name==NULL)
+            break;
     }
+    //default macros
+    switch (stage) {
+        case SG_SHADERSTAGE_VS: d3d_macros[macro_index].Name = "D_VERTEX"; break;
+        case SG_SHADERSTAGE_FS: d3d_macros[macro_index].Name = "D_PIXEL"; break;
+        case SG_SHADERSTAGE_COMPUTE: d3d_macros[macro_index].Name = "D_COMPUTE"; break;
+        default: SOKOL_ASSERT(false);
+    }
+    d3d_macros[macro_index].Definition = "true";
+
+    // load from file
+    char* shader_filebuffer = NULL;
+    if (shader_desc->file_path[0] != 0) {
+        shader_filebuffer = _sg_string_loadfromfile(shader_desc->file_path);
+        SOKOL_ASSERT(shader_filebuffer!=NULL);
+    }
+    const char* shd_model[SG_NUM_SHADER_STAGES] ={"vs_5_0", "ps_5_0", "cs_5_0"};
+    const char* source = shader_filebuffer == NULL ? stage_desc->source : shader_filebuffer;
+    SOKOL_ASSERT(source);
     HRESULT hr = D3DCompile(
-        stage_desc->source,                 /* pSrcData */
-        strlen(stage_desc->source),         /* SrcDataSize */
+        source,                 /* pSrcData */
+        strlen(source),         /* SrcDataSize */
         NULL,                               /* pSourceName */
         d3d_macros,                         /* pDefines */
         D3D_COMPILE_STANDARD_FILE_INCLUDE,  /* pInclude */
         stage_desc->entry ? stage_desc->entry : "main",     /* pEntryPoint */
-        target,     /* pTarget (vs_5_0 or ps_5_0) */
+        shd_model[stage],     /* pTarget (vs_5_0 or ps_5_0) */
         D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR | D3DCOMPILE_OPTIMIZATION_LEVEL3,   /* Flags1 */
         0,          /* Flags2 */
         &output,    /* ppCode */
         &errors);   /* ppErrorMsgs */
+
+    SOKOL_FREE(shader_filebuffer);
+
     if (errors) {
         SOKOL_LOG((LPCSTR)ID3D10Blob_GetBufferPointer(errors));
         ID3D10Blob_Release(errors); errors = NULL;
@@ -4856,7 +4911,6 @@ _SOKOL_PRIVATE ID3DBlob* _sg_d3d11_compile_shader(const sg_shader_stage_desc* st
 #define ID3D11ShaderReflection_GetResourceBindingDescByName(This,Name,pDesc) ( (This)->lpVtbl -> GetResourceBindingDescByName(This,Name,pDesc) ) 
 #define ID3D11ShaderReflectionConstantBuffer_GetDesc(This,pDesc) ( (This)->lpVtbl -> GetDesc(This,pDesc) ) 
 
-
 _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* desc) {
     SOKOL_ASSERT(shd && desc);
     SOKOL_ASSERT(shd->slot.state == SG_RESOURCESTATE_ALLOC);
@@ -4869,11 +4923,14 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
     ID3DBlob* shd_blob[SG_NUM_SHADER_STAGES] = {};
 #endif
 
-    const bool compute = desc->cs.source || desc->cs.byte_code;
-    for (int i=0; i<SG_NUM_SHADER_STAGES; i++ ) {
-        if (!desc->descs[i].byte_code && !desc->descs[i].source)
-            continue;
+    for (int i=0; i<SG_NUM_SHADER_STAGES; i++) {
+        sg_shader_stage stage = (sg_shader_stage)i;
+        if (stage!=SG_SHADERSTAGE_COMPUTE && desc->compute ) continue;
+        if (stage==SG_SHADERSTAGE_COMPUTE && !desc->compute ) continue;
 
+        /*if (!desc->descs[i].byte_code && !desc->descs[i].source && !desc->file_path[0]==0)
+            continue;
+        */
         if(desc->descs[i].byte_code) {
             /* create from byte code */
             shd_ptr[i] = desc->descs[i].byte_code;
@@ -4881,9 +4938,8 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
         }
         else {
             /* compile shader code */
-            const char* shd_model[SG_NUM_SHADER_STAGES] = { "vs_5_0", "ps_5_0", "cs_5_0" };
 #if defined(SOKOL_D3D11_SHADER_COMPILER)
-            shd_blob[i] = _sg_d3d11_compile_shader( &desc->descs[i], shd_model[i] );
+            shd_blob[i] = _sg_d3d11_compile_shader(desc, stage);
             if(shd_blob[i]) {
                 shd_ptr[i] = ID3D10Blob_GetBufferPointer( shd_blob[i] );
                 shd_length[i] = ID3D10Blob_GetBufferSize( shd_blob[i] );
@@ -4975,7 +5031,7 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
         }*/
     }
 
-    if (compute && shd_length[SG_SHADERSTAGE_COMPUTE]>0) {
+    if (desc->compute && shd_length[SG_SHADERSTAGE_COMPUTE]>0) {
         SOKOL_ASSERT( shd_length[SG_SHADERSTAGE_VS]==0 );
         SOKOL_ASSERT( shd_length[SG_SHADERSTAGE_FS]==0 );
         hr = ID3D11Device_CreateComputeShader( _sg_d3d11.dev, shd_ptr[SG_SHADERSTAGE_COMPUTE], shd_length[SG_SHADERSTAGE_COMPUTE], NULL, &shd->d3d11_cs );
@@ -5008,6 +5064,8 @@ _SOKOL_PRIVATE void _sg_create_shader(_sg_shader* shd, const sg_shader_desc* des
         shd_blob[stage_index] = 0;
     }
     #endif
+
+    shd->desc = *desc;
 }
 
 _SOKOL_PRIVATE void _sg_destroy_shader(_sg_shader* shd) {
@@ -5034,30 +5092,21 @@ _SOKOL_PRIVATE void _sg_destroy_shader(_sg_shader* shd) {
     }
     _sg_init_shader(shd);
 }
-
-_SOKOL_PRIVATE void _sg_create_pipeline(_sg_pipeline* pip, _sg_shader* shd, const sg_pipeline_desc* desc) {
+_SOKOL_PRIVATE void _sg_pipeline_bind_shader(_sg_pipeline* pip, _sg_shader* shd, const sg_pipeline_desc* desc) {
     SOKOL_ASSERT(pip && shd && desc);
-    SOKOL_ASSERT(pip->slot.state == SG_RESOURCESTATE_ALLOC);
-    SOKOL_ASSERT(desc->shader.id == shd->slot.id);
     SOKOL_ASSERT(shd->slot.state == SG_RESOURCESTATE_VALID);
-    SOKOL_ASSERT(shd->d3d11_vs_blob && shd->d3d11_vs_blob_length > 0);
-    SOKOL_ASSERT(!pip->d3d11_il && !pip->d3d11_rs && !pip->d3d11_dss && !pip->d3d11_bs);
-    HRESULT hr;
+    SOKOL_ASSERT(shd->d3d11_vs_blob && shd->d3d11_vs_blob_length>0);
+    SOKOL_ASSERT(desc->shader.id==shd->slot.id);
 
+    SOKOL_ASSERT(pip->slot.state==SG_RESOURCESTATE_ALLOC || pip->slot.state==SG_RESOURCESTATE_VALID);
+    if (pip->d3d11_il) {
+        ID3D11InputLayout_Release(pip->d3d11_il);
+        pip->d3d11_il = NULL;
+    }
+
+    HRESULT hr;
     pip->shader = shd;
     pip->shader_id = desc->shader;
-    pip->index_type = _sg_def(desc->index_type, SG_INDEXTYPE_NONE);
-    pip->color_attachment_count = _sg_def(desc->blend.color_attachment_count, 1);
-    pip->color_format = _sg_def(desc->blend.color_format, SG_PIXELFORMAT_RGBA8);
-    pip->depth_format = _sg_def(desc->blend.depth_format, SG_PIXELFORMAT_DEPTHSTENCIL);
-    pip->sample_count = _sg_def(desc->rasterizer.sample_count, 1);
-    pip->d3d11_index_format = _sg_d3d11_index_format(pip->index_type);
-    pip->d3d11_topology = _sg_d3d11_primitive_topology(_sg_def(desc->primitive_type, SG_PRIMITIVETYPE_TRIANGLES));
-    for (int i = 0; i < 4; i++) {
-        pip->blend_color[i] = desc->blend.blend_color[i];
-    }
-    pip->d3d11_stencil_ref = desc->depth_stencil.stencil_ref;
-
     /* create input layout object */
     int auto_offset[SG_MAX_SHADERSTAGE_BUFFERS];
     for (int layout_index = 0; layout_index < SG_MAX_SHADERSTAGE_BUFFERS; layout_index++) {
@@ -5114,6 +5163,29 @@ _SOKOL_PRIVATE void _sg_create_pipeline(_sg_pipeline* pip, _sg_shader* shd, cons
         &pip->d3d11_il);
     SOKOL_DX_CHECKMSGRET(pip, hr, "Error creating Input Layout");
     SOKOL_ASSERT(pip->d3d11_il);
+}
+
+_SOKOL_PRIVATE void _sg_create_pipeline(_sg_pipeline* pip, _sg_shader* shd, const sg_pipeline_desc* desc) {
+    SOKOL_ASSERT(pip && shd && desc);
+    SOKOL_ASSERT(pip->slot.state == SG_RESOURCESTATE_ALLOC);
+    SOKOL_ASSERT(desc->shader.id == shd->slot.id);
+    SOKOL_ASSERT(shd->slot.state == SG_RESOURCESTATE_VALID);
+    SOKOL_ASSERT(shd->d3d11_vs_blob && shd->d3d11_vs_blob_length > 0);
+    SOKOL_ASSERT(!pip->d3d11_il && !pip->d3d11_rs && !pip->d3d11_dss && !pip->d3d11_bs);
+    HRESULT hr;
+   
+    _sg_pipeline_bind_shader(pip, shd, desc);
+    pip->index_type = _sg_def(desc->index_type, SG_INDEXTYPE_NONE);
+    pip->color_attachment_count = _sg_def(desc->blend.color_attachment_count, 1);
+    pip->color_format = _sg_def(desc->blend.color_format, SG_PIXELFORMAT_RGBA8);
+    pip->depth_format = _sg_def(desc->blend.depth_format, SG_PIXELFORMAT_DEPTHSTENCIL);
+    pip->sample_count = _sg_def(desc->rasterizer.sample_count, 1);
+    pip->d3d11_index_format = _sg_d3d11_index_format(pip->index_type);
+    pip->d3d11_topology = _sg_d3d11_primitive_topology(_sg_def(desc->primitive_type, SG_PRIMITIVETYPE_TRIANGLES));
+    for (int i = 0; i < 4; i++) {
+        pip->blend_color[i] = desc->blend.blend_color[i];
+    }
+    pip->d3d11_stencil_ref = desc->depth_stencil.stencil_ref;
 
     /* create rasterizer state */
     D3D11_RASTERIZER_DESC rs_desc;
@@ -5169,6 +5241,7 @@ _SOKOL_PRIVATE void _sg_create_pipeline(_sg_pipeline* pip, _sg_shader* shd, cons
     hr = ID3D11Device_CreateBlendState(_sg_d3d11.dev, &bs_desc, &pip->d3d11_bs);
     SOKOL_ASSERT(SUCCEEDED(hr) && pip->d3d11_bs);
 
+    pip->desc = *desc;
     pip->slot.state = SG_RESOURCESTATE_VALID;
     return;
 }
@@ -8008,8 +8081,10 @@ _SOKOL_PRIVATE bool _sg_validate_shader_desc(const sg_shader_desc* desc) {
             SOKOL_VALIDATE( 0!=desc->fs.source, _SG_VALIDATE_SHADERDESC_SOURCE );
         #elif defined(SOKOL_METAL_MACOS) || defined(SOKOL_METAL_IOS) || defined(SOKOL_D3D11_SHADER_COMPILER)
             /* on Metal or D3D with shader compiler, must provide shader source code or byte code */
-            SOKOL_VALIDATE( (0!=desc->vs.source)||(0!=desc->vs.byte_code), _SG_VALIDATE_SHADERDESC_SOURCE_OR_BYTECODE );
-            SOKOL_VALIDATE( (0!=desc->fs.source)||(0!=desc->fs.byte_code), _SG_VALIDATE_SHADERDESC_SOURCE_OR_BYTECODE );
+            if (0==desc->file_path[0]) {
+                SOKOL_VALIDATE( (0!=desc->vs.source)||(0!=desc->vs.byte_code), _SG_VALIDATE_SHADERDESC_SOURCE_OR_BYTECODE );
+                SOKOL_VALIDATE( (0!=desc->fs.source)||(0!=desc->fs.byte_code), _SG_VALIDATE_SHADERDESC_SOURCE_OR_BYTECODE );
+            }
         #else
             /* on D3D11 without shader compiler, must provide byte code */
             SOKOL_VALIDATE( 0!=desc->vs.byte_code, _SG_VALIDATE_SHADERDESC_BYTECODE );
@@ -8683,6 +8758,13 @@ sg_shader sg_make_shader(const sg_shader_desc* desc) {
     }
     return shd_id;
 }
+sg_shader sg_make_shader_frompath( const char *path ) {
+    SOKOL_ASSERT(path);
+    SOKOL_ASSERT(strlen( path )<SG_MAX_PATH );
+    sg_shader_desc desc = {};
+    strcpy(desc.file_path, path);
+    return sg_make_shader(&desc);
+}
 
 sg_pipeline sg_make_pipeline(const sg_pipeline_desc* desc) {
     SOKOL_ASSERT(desc);
@@ -8712,6 +8794,54 @@ sg_pass sg_make_pass(const sg_pass_desc* desc) {
         SOKOL_LOG("pass pool exhausted!");
     }
     return pass_id;
+}
+
+bool sg_shader_reload(sg_shader shd_id) {
+    _sg_shader* shd = _sg_lookup_shader(&_sg.pools, shd_id.id);
+    SOKOL_ASSERT(shd);
+    sg_shader new_shader_id = sg_make_shader(&shd->desc);
+    if (sg_shader_isvalid(new_shader_id)==false) {
+        return false;
+    }
+
+    // todo check inputlayer is the same
+    // swap and detroy
+    _sg_shader* new_shd = _sg_lookup_shader(&_sg.pools, new_shader_id.id);
+    SOKOL_ASSERT(new_shd);
+    _sg_shader temp = *new_shd;
+    *new_shd = *shd;
+    *shd = temp;
+    shd->slot.id = shd_id.id;
+    sg_destroy_shader(new_shader_id);
+
+    // no replace all 
+    for (int i = 0; i<_sg.pools.pipeline_pool.size; i++) {
+        if ( _sg.pools.pipelines[i].slot.state==SG_RESOURCESTATE_VALID) {
+            _sg_pipeline* pip = &_sg.pools.pipelines[i];
+            if (pip->shader_id.id==shd_id.id) {
+                SOKOL_ASSERT(pip->shader==shd);
+                _sg_pipeline_bind_shader(pip, shd, &pip->desc);
+            }
+        }
+    }
+
+    return true;
+}
+
+void sg_shader_reload_all() {
+    SOKOL_LOG("Reloading all shaders");
+    for (int i = 0; i<_sg.pools.shader_pool.size; i++) {
+        if ( _sg.pools.shaders[i].slot.state==SG_RESOURCESTATE_VALID) {
+            _sg_shader* shd = &_sg.pools.shaders[i];
+            sg_shader shd_id;
+            shd_id.id = shd->slot.id;
+            if (shd->desc.file_path[0]!='\0') {
+                if (sg_shader_reload(shd_id)==false) {
+                    SOKOL_LOG("Error reloading shader %s", shd->file_path);
+                }
+            }
+        }
+    }
 }
 
 /*-- destroy resource --------------------------------------------------------*/
